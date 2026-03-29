@@ -10,7 +10,7 @@
 `paper-organizer` 是一个运行在本地 Linux 环境的自动化脚本，
 负责监控一个"临时 papers 文件夹"，将其中命名混乱的学术 PDF
 （通常是 DOI 号或随机字符串）重命名为**中文可读标题**，
-并将摘要摘要写入一个统一的 `_index.md` 索引文件。
+并将论文基本信息和摘要写入一个统一的 `_index.md` 索引文件。
 
 **核心假设：**
 
@@ -42,7 +42,7 @@ paper-organizer/
 ## 数据流
 
 ```
-inbox/ 中的 .pdf 文件
+.pdf 文件
         │
         ▼
 [1] extractor.py
@@ -65,7 +65,7 @@ inbox/ 中的 .pdf 文件
         │
         ▼
 [4] index_writer.py
-    └─ 追加写入 inbox/_index.md
+    └─ 追加写入 _index.md
 ```
 
 ---
@@ -75,7 +75,7 @@ inbox/ 中的 .pdf 文件
 ### `organizer.py`（入口）
 
 - 解析 `config.toml`
-- 遍历 `inbox_dir` 下所有 `.pdf` 文件
+- 遍历 `papers` 下所有 `.pdf` 文件
 - 对每个文件：加载哈希缓存 → 调用 extractor → 调用 llm → 调用 renamer → 调用 index_writer
 - 异常时记录 log，**不中断整体流程**（单文件失败不影响其他文件）
 - 支持 `--dry-run` 标志：只打印拟操作，不实际重命名
@@ -115,8 +115,8 @@ class PaperMeta(TypedDict):
 
 **模型选择建议（写在 config.toml，不硬编码）：**
 
-- 翻译标题：`qwen2.5:1.5b` 即可
-- 摘要提炼：推荐 `qwen2.5:3b` 或 `phi3.5:3.8b`
+- 翻译标题：`qwen3.5:0.8b` 即可
+- 摘要提炼：推荐 `qwen3.5:9b`
 
 **Prompt 设计原则：**
 
@@ -132,7 +132,7 @@ class PaperMeta(TypedDict):
 
 ### `lib/index_writer.py`
 
-写入 `inbox/_index.md`，格式如下：
+写入 `_index.md`，格式如下：
 
 ```markdown
 ## {year}\_{zh_title}
@@ -155,7 +155,7 @@ class PaperMeta(TypedDict):
 
 ```toml
 [paths]
-inbox_dir   = "~/papers/inbox"   # 监控目录
+inbox_dir   = "~/papers"   # 监控目录
 log_file    = "~/papers/organizer.log"
 
 [llm]
@@ -170,6 +170,18 @@ add_summary      = true    # 是否生成摘要（关闭后只做重命名）
 crossref_timeout = 5       # CrossRef API 超时秒数
 dry_run          = false   # true 时只打印，不实际操作
 ```
+
+---
+
+## Tests
+
+测试用例放在 tests/，至少覆盖：
+
+    test_extractor.py：DOI 提取（mock CrossRef 响应）、PyMuPDF 降级路径
+
+    test_renamer.py：sanitize、重名冲突、幂等性
+
+    test_llm.py：Ollama 不可用时的降级行为（mock）
 
 ---
 

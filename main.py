@@ -1,5 +1,4 @@
-def main():
-    print("Hello from paper-organizer!")
+from organizer import main
 
 
 if __name__ == "__main__":
