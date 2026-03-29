@@ -9,6 +9,7 @@ dependencies = [
     "pdf2doi>=1.7",
     "pydantic>=2.12.5",
     "pymupdf>=1.27.2.2",
+    "pymupdf4llm>=1.27.2.2",
 ]
 
 [dependency-groups]
