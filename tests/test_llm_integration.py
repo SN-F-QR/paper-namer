@@ -4,8 +4,8 @@ from pathlib import Path
 import pytest
 from ollama import Client
 
-from lib.extractor import extract_metadata
-from lib.llm import LLMConfig, generate_chinese_metadata
+from lib.extractor import extract_pdf_text
+from lib.llm import LLMConfig, extract_metadata_from_text, generate_chinese_metadata
 
 
 def _ollama_is_ready(host: str) -> bool:
@@ -24,7 +24,7 @@ def test_llm_real_generate_title_and_summary_with_real_pdf():
     config = LLMConfig(
         enabled=True,
         translate_model="qwen3.5:0.8b",
-        summary_model="qwen3.5:9b",
+        summary_model="qwen3.5:0.8b",
         ollama_host="http://localhost:11434",
         request_timeout=60,
         debug=True,
@@ -34,9 +34,19 @@ def test_llm_real_generate_title_and_summary_with_real_pdf():
         pytest.skip("Ollama service unavailable, skip real LLM integration test")
 
     try:
-        meta = extract_metadata(pdf_path, crossref_timeout=5)
+        extracted = extract_pdf_text(pdf_path, max_pages=3)
     except Exception as exc:
-        pytest.skip(f"Metadata extraction unavailable: {exc}")
+        pytest.skip(f"PDF text extraction unavailable: {exc}")
+
+    try:
+        meta = extract_metadata_from_text(
+            extracted["text"],
+            fallback_title=extracted["fallback_title"],
+            config=config,
+            strict=True,
+        )
+    except Exception as exc:
+        pytest.skip(f"LLM metadata extraction unavailable: {exc}")
 
     if not meta.get("title"):
         pytest.skip("No title extracted from real PDF")

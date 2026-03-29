@@ -8,9 +8,9 @@ from typing import Any
 import tomllib
 
 from lib.errors import OrganizerError
-from lib.extractor import extract_metadata
+from lib.extractor import extract_pdf_text
 from lib.index_writer import append_index_entry
-from lib.llm import LLMConfig, generate_chinese_metadata
+from lib.llm import LLMConfig, extract_metadata_from_text, generate_chinese_metadata
 from lib.renamer import ProcessedStore, rename_pdf
 
 
@@ -57,7 +57,7 @@ def process_one_pdf(
     *,
     logger: logging.Logger,
     processed: ProcessedStore,
-    crossref_timeout: int,
+    extract_pages: int,
     llm_config: LLMConfig,
     add_summary: bool,
     write_index: bool,
@@ -73,18 +73,28 @@ def process_one_pdf(
         return
 
     try:
-        meta = extract_metadata(
-            pdf_path, crossref_timeout=crossref_timeout, logger=logger
+        extracted = extract_pdf_text(
+            pdf_path,
+            max_pages=extract_pages,
+            logger=logger,
         )
-        zh_title, summary = generate_chinese_metadata(
-            meta,
+        meta = extract_metadata_from_text(
+            extracted["text"],
+            fallback_title=extracted["fallback_title"],
             config=llm_config,
-            add_summary=add_summary,
             logger=logger,
         )
 
-        if meta["source"] == "pymupdf" and "[ocr]" not in zh_title.lower():
-            zh_title = f"{zh_title}[ocr]"
+        if meta["source"] == "fallback":
+            zh_title = meta["title"]
+            summary = "未生成摘要"
+        else:
+            zh_title, summary = generate_chinese_metadata(
+                meta,
+                config=llm_config,
+                add_summary=add_summary,
+                logger=logger,
+            )
 
         new_path = rename_pdf(
             pdf_path,
@@ -123,10 +133,26 @@ def main() -> None:
     behavior = config.get("behavior", {})
     llm = config.get("llm", {})
 
-    inbox_dir = _expand(paths.get("inbox_dir", "~/papers"))
-    log_file = _expand(paths.get("log_file", "~/papers/organizer.log"))
+    inbox_raw = paths.get("inbox_dir")
+    log_file_raw = paths.get("log_file")
+    if not inbox_raw or not log_file_raw:
+        raise OrganizerError(
+            "Missing required config: paths.inbox_dir and paths.log_file"
+        )
+
+    translate_model_raw = llm.get("translate_model")
+    summary_model_raw = llm.get("summary_model")
+    if not translate_model_raw or not summary_model_raw:
+        raise OrganizerError(
+            "Missing required config: llm.translate_model and llm.summary_model"
+        )
+
+    metadata_model_raw = llm.get("metadata_model")
+
+    inbox_dir = _expand(str(inbox_raw))
+    log_file = _expand(str(log_file_raw))
     dry_run = bool(args.dry_run or behavior.get("dry_run", False))
-    crossref_timeout = int(behavior.get("crossref_timeout", 5))
+    extract_pages = int(behavior.get("extract_pages", 3))
     write_index = bool(behavior.get("write_index", True))
     add_summary = bool(behavior.get("add_summary", True))
 
@@ -135,10 +161,12 @@ def main() -> None:
 
     llm_config = LLMConfig(
         enabled=bool(llm.get("enabled", True)),
-        translate_model=str(llm.get("translate_model", "qwen3.5:0.8b")),
-        summary_model=str(llm.get("summary_model", "qwen3.5:9b")),
+        translate_model=str(translate_model_raw),
+        summary_model=str(summary_model_raw),
         ollama_host=str(llm.get("ollama_host", "http://localhost:11434")),
+        metadata_model=str(metadata_model_raw or summary_model_raw),
         request_timeout=int(llm.get("request_timeout", 60)),
+        debug=bool(llm.get("debug", False)),
     )
 
     processed_path = config_path.parent / ".processed"
@@ -154,7 +182,7 @@ def main() -> None:
             pdf_path,
             logger=logger,
             processed=processed,
-            crossref_timeout=crossref_timeout,
+            extract_pages=extract_pages,
             llm_config=llm_config,
             add_summary=add_summary,
             write_index=write_index,

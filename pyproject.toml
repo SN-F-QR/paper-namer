@@ -3,10 +3,9 @@ name = "paper-organizer"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
-requires-python = ">=3.13"
+requires-python = ">=3.11"
 dependencies = [
     "ollama>=0.6.1",
-    "pdf2doi>=1.7",
     "pydantic>=2.12.5",
     "pymupdf>=1.27.2.2",
     "pymupdf4llm>=1.27.2.2",

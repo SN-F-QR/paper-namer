@@ -1,35 +1,91 @@
-from pathlib import Path
-
 from lib.extractor import PaperMeta
 from lib.errors import LLMError
-from lib.llm import LLMConfig, generate_chinese_metadata
+from lib.llm import (
+    LLMConfig,
+    extract_metadata_from_text,
+    generate_chinese_metadata,
+)
 
 
-def test_llm_unavailable_fallback(monkeypatch):
-    real_pdf = Path(__file__).with_name("2602.22186v1.pdf")
-    assert real_pdf.exists()
-
+def test_extract_metadata_unavailable_fallback(monkeypatch):
     config = LLMConfig(
         enabled=True,
         translate_model="qwen3.5:0.8b",
         summary_model="qwen3.5:9b",
         ollama_host="http://localhost:11434",
     )
-    meta: PaperMeta = {
-        "title": real_pdf.stem,
-        "abstract": "Some abstract",
-        "year": "2024",
-        "source": "crossref",
-    }
 
     def _raise(*args, **kwargs):
         raise LLMError("connection refused")
 
     monkeypatch.setattr("lib.llm._ollama_chat_json", _raise)
 
-    title, summary = generate_chinese_metadata(meta, config=config, add_summary=True)
-    assert title == "2602.22186v1"
-    assert summary == "未生成摘要"
+    meta = extract_metadata_from_text(
+        "title abstract content",
+        fallback_title="2602.22186v1",
+        config=config,
+    )
+    assert meta["source"] == "fallback"
+    assert meta["title"] == "2602.22186v1"
+    assert meta["abstract"] == ""
+    assert meta["year"] == "未知"
+
+
+def test_extract_metadata_json_retry_then_fallback(monkeypatch):
+    config = LLMConfig(
+        enabled=True,
+        translate_model="qwen3.5:0.8b",
+        summary_model="qwen3.5:9b",
+        ollama_host="http://localhost:11434",
+    )
+
+    responses = iter(["{bad-json", '{"unexpected": "shape"}'])
+    calls = {"count": 0}
+
+    def _mock_chat(*args, **kwargs):
+        calls["count"] += 1
+        return next(responses)
+
+    monkeypatch.setattr("lib.llm._ollama_chat_json", _mock_chat)
+
+    meta = extract_metadata_from_text(
+        "title abstract content",
+        fallback_title="Fallback Title",
+        config=config,
+        strict=False,
+    )
+
+    assert calls["count"] == 2
+    assert meta["source"] == "fallback"
+    assert meta["title"] == "Fallback Title"
+
+
+def test_extract_metadata_success(monkeypatch):
+    config = LLMConfig(
+        enabled=True,
+        translate_model="qwen3.5:0.8b",
+        summary_model="qwen3.5:9b",
+        ollama_host="http://localhost:11434",
+    )
+
+    monkeypatch.setattr(
+        "lib.llm._ollama_chat_json",
+        lambda *args, **kwargs: (
+            '{"title":"A Good Paper","abstract":"A short abstract","year":"2024"}'
+        ),
+    )
+
+    meta = extract_metadata_from_text(
+        "content",
+        fallback_title="Fallback",
+        config=config,
+        strict=True,
+    )
+
+    assert meta["source"] == "llm"
+    assert meta["title"] == "A Good Paper"
+    assert meta["abstract"] == "A short abstract"
+    assert meta["year"] == "2024"
 
 
 def test_llm_fenced_json_response_is_parsed(monkeypatch):
@@ -43,7 +99,7 @@ def test_llm_fenced_json_response_is_parsed(monkeypatch):
         "title": "Codesigning Ripplet: an LLM-Assisted Assessment Authoring",
         "abstract": "This paper introduces an LLM-assisted authoring workflow.",
         "year": "2026",
-        "source": "crossref",
+        "source": "llm",
     }
 
     responses = iter(
@@ -80,7 +136,7 @@ def test_llm_retry_when_first_title_is_not_chinese(monkeypatch):
         "title": "Codesigning Ripplet: an LLM-Assisted Assessment Authoring",
         "abstract": "",
         "year": "2026",
-        "source": "pymupdf",
+        "source": "llm",
     }
 
     responses = iter(

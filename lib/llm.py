@@ -2,14 +2,18 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from pydantic import BaseModel
 from ollama import ChatResponse, Client
+from pydantic import BaseModel
 
 from .errors import LLMError
 from .extractor import PaperMeta
+
+
+LOGGER = logging.getLogger("paper_organizer.llm")
 
 
 @dataclass(frozen=True)
@@ -18,8 +22,15 @@ class LLMConfig:
     translate_model: str
     summary_model: str
     ollama_host: str
+    metadata_model: str | None = None
     request_timeout: int = 60
     debug: bool = False
+
+
+class ExtractedMetadata(BaseModel):
+    title: str
+    abstract: str
+    year: str
 
 
 class TranslatedTitle(BaseModel):
@@ -60,6 +71,13 @@ def _truncate_for_filename(title: str, max_len: int = 50) -> str:
     return clean[:max_len].strip() or "untitled"
 
 
+def _normalize_year(year_text: str) -> str:
+    matched = re.search(r"(19|20)\d{2}", year_text or "")
+    if not matched:
+        return "未知"
+    return matched.group(0)
+
+
 def _ollama_chat_json(
     host: str,
     model: str,
@@ -71,11 +89,10 @@ def _ollama_chat_json(
 ) -> str:
     client = Client(host=host, timeout=timeout_seconds)
     if debug:
-        print(
+        LOGGER.info(
             "[LLM][request] "
             f"host={host} model={model} timeout={timeout_seconds}s "
             f"prompt={prompt}",
-            flush=True,
         )
     try:
         response: ChatResponse = client.chat(
@@ -90,7 +107,7 @@ def _ollama_chat_json(
 
     content = response.message.content or "{}"
     if debug:
-        print(f"[LLM][response] model={model} content={content}", flush=True)
+        LOGGER.info("[LLM][response] model=%s content=%s", model, content)
     return content
 
 
@@ -129,6 +146,120 @@ def _normalize_json_text(content: str) -> str:
             pass
 
     raise LLMError("LLM returned invalid JSON payload")
+
+
+def _parse_metadata(content: str) -> tuple[str, str, str]:
+    try:
+        data = ExtractedMetadata.model_validate_json(_normalize_json_text(content))
+        title = data.title.strip()
+        abstract = data.abstract.strip()
+        year = _normalize_year(data.year.strip())
+    except Exception:
+        try:
+            payload = json.loads(_normalize_json_text(content))
+        except Exception as exc:
+            raise LLMError("LLM returned invalid JSON for metadata") from exc
+
+        title = _extract_first_string(
+            payload,
+            (
+                ("title",),
+                ("properties", "title", "title"),
+            ),
+        )
+        abstract = _extract_first_string(
+            payload,
+            (
+                ("abstract",),
+                ("properties", "abstract", "title"),
+            ),
+        )
+        year = _normalize_year(
+            _extract_first_string(
+                payload,
+                (
+                    ("year",),
+                    ("properties", "year", "title"),
+                ),
+            )
+        )
+
+    if not title:
+        raise LLMError("title missing from metadata response")
+
+    return title, abstract, year
+
+
+def extract_metadata_from_text(
+    raw_text: str,
+    *,
+    fallback_title: str,
+    config: LLMConfig,
+    logger: logging.Logger | None = None,
+    strict: bool = False,
+) -> PaperMeta:
+    safe_fallback_title = _truncate_for_filename(fallback_title)
+    fallback_meta: PaperMeta = {
+        "title": safe_fallback_title,
+        "abstract": "",
+        "year": "未知",
+        "source": "fallback",
+    }
+
+    if not config.enabled:
+        return fallback_meta
+
+    text_for_prompt = " ".join((raw_text or "").split())[:9000]
+    if not text_for_prompt:
+        if strict:
+            raise LLMError("Empty PDF text for metadata extraction")
+        return fallback_meta
+
+    metadata_schema = ExtractedMetadata.model_json_schema()
+    prompt = (
+        "从给定论文正文片段中提取结构化元信息。\n"
+        "要求：year 仅输出4位年份（找不到写'未知'）；title 保留原文语言；abstract 尽量提取摘要正文。\n"
+        "只输出一个合法 JSON 对象，不要使用 Markdown 代码块，不要输出任何额外文本。\n"
+        f"JSON Schema: {json.dumps(metadata_schema, ensure_ascii=False)}\n\n"
+        f"正文片段（来自PDF前几页）：{text_for_prompt}"
+    )
+
+    model_name = config.metadata_model or config.summary_model
+    last_error: Exception | None = None
+
+    for attempt in range(2):
+        try:
+            content = _ollama_chat_json(
+                config.ollama_host,
+                model_name,
+                prompt,
+                timeout_seconds=config.request_timeout,
+                response_schema=metadata_schema,
+                debug=config.debug,
+            )
+            title, abstract, year = _parse_metadata(content)
+            return {
+                "title": title,
+                "abstract": abstract,
+                "year": year,
+                "source": "llm",
+            }
+        except Exception as exc:
+            last_error = exc
+            if attempt == 0 and logger:
+                logger.warning("Metadata extraction retry: %s", exc)
+
+    if logger and last_error is not None:
+        logger.warning("Metadata extraction fallback: %s", last_error)
+
+    if strict:
+        if isinstance(last_error, LLMError):
+            raise last_error
+        if last_error is not None:
+            raise LLMError(f"Metadata extraction failed: {last_error}") from last_error
+        raise LLMError("Metadata extraction failed")
+
+    return fallback_meta
 
 
 def _translate_title(title: str, config: LLMConfig) -> str:

@@ -1,16 +1,30 @@
-import json
+import sys
 from pathlib import Path
+from typing import Any
 
 from lib import extractor
-from lib.errors import ExtractorError
 
 
-class _FakeResponse:
-    def __init__(self, payload: dict):
-        self._data = json.dumps(payload).encode("utf-8")
+class _FakePage:
+    def __init__(self, text_dict: dict[str, Any]) -> None:
+        self._text_dict = text_dict
 
-    def read(self) -> bytes:
-        return self._data
+    def get_text(self, mode: str) -> dict[str, Any]:
+        assert mode == "dict"
+        return self._text_dict
+
+
+class _FakeDoc:
+    def __init__(self, page_count: int, first_page_dict: dict[str, Any]) -> None:
+        self._page_count = page_count
+        self._first_page = _FakePage(first_page_dict)
+
+    def __len__(self) -> int:
+        return self._page_count
+
+    def __getitem__(self, idx: int) -> _FakePage:
+        assert idx == 0
+        return self._first_page
 
     def __enter__(self):
         return self
@@ -19,144 +33,130 @@ class _FakeResponse:
         return False
 
 
-def test_extract_metadata_doi_crossref(monkeypatch, tmp_path: Path):
+def test_extract_pdf_text_uses_first_three_pages(monkeypatch, tmp_path: Path):
     pdf = tmp_path / "paper.pdf"
     pdf.write_bytes(b"%PDF-fake")
 
-    monkeypatch.setattr(
-        extractor, "_extract_doi_with_pdf2doi", lambda _: "10.1000/test"
-    )
-
-    payload = {
-        "message": {
-            "title": ["A Good Paper"],
-            "abstract": "<jats:p>Important finding.</jats:p>",
-            "issued": {"date-parts": [[2024, 1, 1]]},
-        }
+    captured: dict[str, Any] = {}
+    first_page_dict = {
+        "blocks": [
+            {
+                "lines": [
+                    {
+                        "spans": [
+                            {"size": 22, "text": "Largest Title"},
+                            {"size": 10, "text": "some content"},
+                        ]
+                    }
+                ]
+            }
+        ]
     }
 
-    monkeypatch.setattr(
-        extractor, "urlopen", lambda *args, **kwargs: _FakeResponse(payload)
-    )
+    class _FakeFitz:
+        @staticmethod
+        def open(path: Path) -> _FakeDoc:
+            assert path == pdf
+            return _FakeDoc(page_count=5, first_page_dict=first_page_dict)
 
-    meta = extractor.extract_metadata(pdf, crossref_timeout=1)
-    assert meta["source"] == "crossref"
-    assert meta["title"] == "A Good Paper"
-    assert meta["abstract"] == "Important finding."
-    assert meta["year"] == "2024"
+    class _FakePyMuPDF4LLM:
+        @staticmethod
+        def to_markdown(doc: _FakeDoc, *, pages: list[int], **kwargs: Any) -> str:
+            captured["doc"] = doc
+            captured["pages"] = pages
+            return "# Largest Title\n\nAbstract text"
+
+    monkeypatch.setitem(sys.modules, "fitz", _FakeFitz)
+    monkeypatch.setitem(sys.modules, "pymupdf4llm", _FakePyMuPDF4LLM)
+
+    extracted = extractor.extract_pdf_text(pdf, max_pages=3)
+    assert captured["pages"] == [0, 1, 2]
+    assert extracted["source"] == "pymupdf4llm"
+    assert extracted["fallback_title"] == "Largest Title"
+    assert "Abstract" in extracted["text"]
 
 
-def test_extract_metadata_pymupdf_fallback(monkeypatch, tmp_path: Path):
+def test_extract_pdf_text_single_page_pdf(monkeypatch, tmp_path: Path):
     pdf = tmp_path / "paper.pdf"
     pdf.write_bytes(b"%PDF-fake")
 
-    monkeypatch.setattr(extractor, "_extract_doi_with_pdf2doi", lambda _: None)
+    captured: dict[str, Any] = {}
 
-    class _FakePage:
-        def get_text(self, mode: str):
-            assert mode == "dict"
-            return {
-                "blocks": [
+    first_page_dict = {
+        "blocks": [
+            {
+                "lines": [
                     {
-                        "lines": [
-                            {
-                                "spans": [
-                                    {"size": 20, "text": "Largest Title"},
-                                    {"size": 10, "text": "small text"},
-                                ]
-                            }
+                        "spans": [
+                            {"size": 20, "text": "Single Page Title"},
                         ]
                     }
                 ]
             }
-
-    class _FakeDoc:
-        def __len__(self):
-            return 1
-
-        def __getitem__(self, idx: int):
-            assert idx == 0
-            return _FakePage()
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            return False
+        ]
+    }
 
     class _FakeFitz:
         @staticmethod
-        def open(path):
+        def open(path: Path) -> _FakeDoc:
             assert path == pdf
-            return _FakeDoc()
+            return _FakeDoc(page_count=1, first_page_dict=first_page_dict)
 
-    monkeypatch.setitem(__import__("sys").modules, "fitz", _FakeFitz)
+    class _FakePyMuPDF4LLM:
+        @staticmethod
+        def to_markdown(doc: _FakeDoc, *, pages: list[int], **kwargs: Any) -> str:
+            captured["pages"] = pages
+            return "single page text"
 
-    meta = extractor.extract_metadata(pdf)
-    assert meta["source"] == "pymupdf"
-    assert meta["title"] == "Largest Title"
-    assert meta["year"] == "未知"
+    monkeypatch.setitem(sys.modules, "fitz", _FakeFitz)
+    monkeypatch.setitem(sys.modules, "pymupdf4llm", _FakePyMuPDF4LLM)
+
+    extracted = extractor.extract_pdf_text(pdf, max_pages=3)
+    assert captured["pages"] == [0]
+    assert extracted["fallback_title"] == "Single Page Title"
 
 
-def test_extract_metadata_doi_error_logs_and_fallback(monkeypatch, tmp_path: Path):
+def test_extract_pdf_text_low_density_warning(monkeypatch, tmp_path: Path):
     pdf = tmp_path / "paper.pdf"
     pdf.write_bytes(b"%PDF-fake")
 
-    monkeypatch.setattr(
-        extractor,
-        "_extract_doi_with_pdf2doi",
-        lambda _: (_ for _ in ()).throw(ExtractorError("pdf2doi broken")),
-    )
-
-    class _FakePage:
-        def get_text(self, mode: str):
-            assert mode == "dict"
-            return {
-                "blocks": [
+    first_page_dict = {
+        "blocks": [
+            {
+                "lines": [
                     {
-                        "lines": [
-                            {
-                                "spans": [
-                                    {"size": 18, "text": "Recovered Title"},
-                                ]
-                            }
+                        "spans": [
+                            {"size": 18, "text": "Recovered Title"},
                         ]
                     }
                 ]
             }
-
-    class _FakeDoc:
-        def __len__(self):
-            return 1
-
-        def __getitem__(self, idx: int):
-            assert idx == 0
-            return _FakePage()
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            return False
+        ]
+    }
 
     class _FakeFitz:
         @staticmethod
-        def open(path):
+        def open(path: Path) -> _FakeDoc:
             assert path == pdf
-            return _FakeDoc()
+            return _FakeDoc(page_count=2, first_page_dict=first_page_dict)
 
-    monkeypatch.setitem(__import__("sys").modules, "fitz", _FakeFitz)
+    class _FakePyMuPDF4LLM:
+        @staticmethod
+        def to_markdown(doc: _FakeDoc, *, pages: list[int], **kwargs: Any) -> str:
+            return "tiny"
+
+    monkeypatch.setitem(sys.modules, "fitz", _FakeFitz)
+    monkeypatch.setitem(sys.modules, "pymupdf4llm", _FakePyMuPDF4LLM)
 
     class _Logger:
         def __init__(self):
             self.calls: list[str] = []
 
-        def warning(self, msg: str, *args):
+        def warning(self, msg: str, *args: object) -> None:
             self.calls.append(msg % args)
 
     logger = _Logger()
-    meta = extractor.extract_metadata(pdf, logger=logger)
+    extracted = extractor.extract_pdf_text(pdf, logger=logger)
 
-    assert meta["source"] == "pymupdf"
-    assert meta["title"] == "Recovered Title"
-    assert any("DOI extraction failed" in msg for msg in logger.calls)
+    assert extracted["fallback_title"] == "Recovered Title"
+    assert any("Low text density" in msg for msg in logger.calls)

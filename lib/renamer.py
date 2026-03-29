@@ -40,7 +40,7 @@ class ProcessedStore:
         )
 
     def compute_hash(self, pdf_path: Path) -> str:
-        md5 = hashlib.md5()  # noqa: S324
+        md5 = hashlib.md5(usedforsecurity=False)
         try:
             with pdf_path.open("rb") as f:
                 md5.update(f.read(4096))
