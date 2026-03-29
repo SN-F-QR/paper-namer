@@ -183,15 +183,7 @@ dry_run          = false   # true 时只打印，不实际操作
 
     test_llm.py：Ollama 不可用时的降级行为（mock）
 
----
-
-## 错误处理约定
-
-- 所有模块抛出自定义异常，统一在 `organizer.py` 顶层 `try/except` 捕获
-- 捕获后：写 log（级别 WARNING）+ 跳过该文件，**继续处理下一个**
-- 网络超时（CrossRef）：降级到 PyMuPDF 路径，无需退出
-- Ollama 不可用（ConnectionRefusedError）：降级到英文文件名，全程记录 WARNING
-- 任何情况下**不修改原始 PDF 内容**，只做重命名
+每次运行完代码，使用`ruff`检查format和lint，禁止随意使用`# ignore`忽略规则
 
 ---
 
