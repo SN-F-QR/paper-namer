@@ -138,6 +138,7 @@ def main() -> None:
         translate_model=str(llm.get("translate_model", "qwen3.5:0.8b")),
         summary_model=str(llm.get("summary_model", "qwen3.5:9b")),
         ollama_host=str(llm.get("ollama_host", "http://localhost:11434")),
+        request_timeout=int(llm.get("request_timeout", 60)),
     )
 
     processed_path = config_path.parent / ".processed"

@@ -7,6 +7,7 @@ enabled = true
 translate_model = "qwen3.5:0.8b"
 summary_model = "qwen3.5:9b"
 ollama_host = "http://localhost:11434"
+request_timeout = 60
 
 [behavior]
 write_index = true

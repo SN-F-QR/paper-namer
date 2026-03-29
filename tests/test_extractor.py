@@ -1,8 +1,8 @@
-import io
 import json
 from pathlib import Path
 
 from lib import extractor
+from lib.errors import ExtractorError
 
 
 class _FakeResponse:
@@ -96,3 +96,67 @@ def test_extract_metadata_pymupdf_fallback(monkeypatch, tmp_path: Path):
     assert meta["source"] == "pymupdf"
     assert meta["title"] == "Largest Title"
     assert meta["year"] == "未知"
+
+
+def test_extract_metadata_doi_error_logs_and_fallback(monkeypatch, tmp_path: Path):
+    pdf = tmp_path / "paper.pdf"
+    pdf.write_bytes(b"%PDF-fake")
+
+    monkeypatch.setattr(
+        extractor,
+        "_extract_doi_with_pdf2doi",
+        lambda _: (_ for _ in ()).throw(ExtractorError("pdf2doi broken")),
+    )
+
+    class _FakePage:
+        def get_text(self, mode: str):
+            assert mode == "dict"
+            return {
+                "blocks": [
+                    {
+                        "lines": [
+                            {
+                                "spans": [
+                                    {"size": 18, "text": "Recovered Title"},
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            }
+
+    class _FakeDoc:
+        def __len__(self):
+            return 1
+
+        def __getitem__(self, idx: int):
+            assert idx == 0
+            return _FakePage()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class _FakeFitz:
+        @staticmethod
+        def open(path):
+            assert path == pdf
+            return _FakeDoc()
+
+    monkeypatch.setitem(__import__("sys").modules, "fitz", _FakeFitz)
+
+    class _Logger:
+        def __init__(self):
+            self.calls: list[str] = []
+
+        def warning(self, msg: str, *args):
+            self.calls.append(msg % args)
+
+    logger = _Logger()
+    meta = extractor.extract_metadata(pdf, logger=logger)
+
+    assert meta["source"] == "pymupdf"
+    assert meta["title"] == "Recovered Title"
+    assert any("DOI extraction failed" in msg for msg in logger.calls)

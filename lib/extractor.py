@@ -5,7 +5,7 @@ import json
 import logging
 import re
 from pathlib import Path
-from typing import TypedDict
+from typing import Any, TypedDict, cast
 from urllib.error import HTTPError, URLError
 from urllib.request import urlopen
 
@@ -27,14 +27,16 @@ def _clean_abstract(raw: str) -> str:
 
 def _extract_doi_with_pdf2doi(pdf_path: Path) -> str | None:
     try:
-        from pdf2doi import pdf2doi  # type: ignore
-    except Exception:
+        from pdf2doi import pdf2doi
+    except ModuleNotFoundError:
         return None
+    except ImportError as exc:
+        raise ExtractorError(f"pdf2doi import failed: {exc}") from exc
 
     try:
         result = pdf2doi(str(pdf_path))
-    except Exception:
-        return None
+    except Exception as exc:
+        raise ExtractorError(f"pdf2doi parse failed: {exc}") from exc
 
     if isinstance(result, dict):
         doi = result.get("identifier") or result.get("doi")
@@ -76,7 +78,7 @@ def _meta_from_pymupdf(
     pdf_path: Path, logger: logging.Logger | None = None
 ) -> PaperMeta:
     try:
-        import fitz  # type: ignore
+        import fitz
     except Exception as exc:
         raise ExtractorError("PyMuPDF unavailable") from exc
 
@@ -85,19 +87,45 @@ def _meta_from_pymupdf(
             if len(doc) == 0:
                 raise ExtractorError("PDF has no pages")
             page = doc[0]
-            text_dict = page.get_text("dict")
+            raw_text_dict = page.get_text("dict")
     except Exception as exc:
         raise ExtractorError(f"PyMuPDF parse failed: {exc}") from exc
 
+    if not isinstance(raw_text_dict, dict):
+        raise ExtractorError("PyMuPDF returned unexpected text structure")
+
+    text_dict = cast(dict[str, Any], raw_text_dict)
+
     spans: list[tuple[float, str]] = []
     all_text_parts: list[str] = []
-    for block in text_dict.get("blocks", []):
-        for line in block.get("lines", []):
-            for span in line.get("spans", []):
+    blocks = text_dict.get("blocks", [])
+    if not isinstance(blocks, list):
+        blocks = []
+
+    for block in blocks:
+        if not isinstance(block, dict):
+            continue
+        lines = block.get("lines", [])
+        if not isinstance(lines, list):
+            continue
+
+        for line in lines:
+            if not isinstance(line, dict):
+                continue
+            span_items = line.get("spans", [])
+            if not isinstance(span_items, list):
+                continue
+
+            for span in span_items:
+                if not isinstance(span, dict):
+                    continue
                 text = str(span.get("text", "")).strip()
                 if not text:
                     continue
-                size = float(span.get("size", 0.0))
+                try:
+                    size = float(span.get("size", 0.0))
+                except (TypeError, ValueError):
+                    size = 0.0
                 spans.append((size, text))
                 all_text_parts.append(text)
 
@@ -105,7 +133,28 @@ def _meta_from_pymupdf(
         raise ExtractorError("No text spans detected")
 
     spans.sort(key=lambda item: item[0], reverse=True)
-    title = spans[0][1]
+
+    title = ""
+    for _, text in spans:
+        lower_text = text.lower()
+        # 跳过常见的非标题特征：DOI/arXiv前缀、URL链接、ISSN
+        if re.match(
+            r"^(?:doi\s*[:/]|arxiv\s*[:/]|10\.\d{4,}/|issn\s*[:/]|https?://|www\.)",
+            lower_text,
+        ):
+            continue
+        # 跳过常见的期刊顶部标签
+        if lower_text in {"research article", "review article", "article", "letter"}:
+            continue
+        # 跳过太短的独立数字（如纯页码集合、年份、编号）
+        if len(text) < 5 and text.isdigit():
+            continue
+
+        title = text
+        break
+
+    if not title:
+        title = spans[0][1]
 
     text_density = len(" ".join(all_text_parts))
     if text_density < 30 and logger:
@@ -125,7 +174,17 @@ def extract_metadata(
     crossref_timeout: int = 5,
     logger: logging.Logger | None = None,
 ) -> PaperMeta:
-    doi = _extract_doi_with_pdf2doi(pdf_path)
+    doi: str | None = None
+    try:
+        doi = _extract_doi_with_pdf2doi(pdf_path)
+    except ExtractorError as exc:
+        if logger:
+            logger.warning(
+                "DOI extraction failed for %s, fallback to PyMuPDF: %s",
+                pdf_path.name,
+                exc,
+            )
+
     if doi:
         try:
             return _meta_from_crossref(doi, timeout=crossref_timeout)
