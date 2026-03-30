@@ -71,7 +71,7 @@ def test_extract_metadata_success(monkeypatch):
     monkeypatch.setattr(
         "lib.llm._ollama_chat_json",
         lambda *args, **kwargs: (
-            '{"title":"A Good Paper","abstract":"A short abstract","year":"2024"}'
+            '{"title":"A Good Paper","abstract":"A short abstract","venue":"CHI","year":"2024"}'
         ),
     )
 
@@ -85,7 +85,86 @@ def test_extract_metadata_success(monkeypatch):
     assert meta["source"] == "llm"
     assert meta["title"] == "A Good Paper"
     assert meta["abstract"] == "A short abstract"
-    assert meta["year"] == "2024"
+    assert meta["year"] == "CHI24"
+
+
+def test_extract_metadata_maps_full_venue_name_to_abbr(monkeypatch):
+    config = LLMConfig(
+        enabled=True,
+        translate_model="qwen3.5:0.8b",
+        summary_model="qwen3.5:9b",
+        ollama_host="http://localhost:11434",
+        venue_aliases=(("user interface software and technology", "UIST"),),
+    )
+
+    monkeypatch.setattr(
+        "lib.llm._ollama_chat_json",
+        lambda *args, **kwargs: (
+            '{"title":"A Good Paper","abstract":"A short abstract","venue":"ACM Symposium on User Interface Software and Technology","year":"2019"}'
+        ),
+    )
+
+    meta = extract_metadata_from_text(
+        "content",
+        fallback_title="Fallback",
+        config=config,
+        strict=True,
+    )
+
+    assert meta["source"] == "llm"
+    assert meta["year"] == "UIST19"
+
+
+def test_extract_metadata_accepts_lowercase_venue_abbr(monkeypatch):
+    config = LLMConfig(
+        enabled=True,
+        translate_model="qwen3.5:0.8b",
+        summary_model="qwen3.5:9b",
+        ollama_host="http://localhost:11434",
+    )
+
+    monkeypatch.setattr(
+        "lib.llm._ollama_chat_json",
+        lambda *args, **kwargs: (
+            '{"title":"A Good Paper","abstract":"A short abstract","venue":"chi","year":"2024"}'
+        ),
+    )
+
+    meta = extract_metadata_from_text(
+        "content",
+        fallback_title="Fallback",
+        config=config,
+        strict=True,
+    )
+
+    assert meta["source"] == "llm"
+    assert meta["year"] == "CHI24"
+
+
+def test_extract_metadata_missing_venue_uses_unk_prefix(monkeypatch):
+    config = LLMConfig(
+        enabled=True,
+        translate_model="qwen3.5:0.8b",
+        summary_model="qwen3.5:9b",
+        ollama_host="http://localhost:11434",
+    )
+
+    monkeypatch.setattr(
+        "lib.llm._ollama_chat_json",
+        lambda *args, **kwargs: (
+            '{"title":"A Good Paper","abstract":"A short abstract","year":"2024"}'
+        ),
+    )
+
+    meta = extract_metadata_from_text(
+        "content",
+        fallback_title="Fallback",
+        config=config,
+        strict=True,
+    )
+
+    assert meta["source"] == "llm"
+    assert meta["year"] == "UNK24"
 
 
 def test_llm_fenced_json_response_is_parsed(monkeypatch):

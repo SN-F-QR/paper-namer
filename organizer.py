@@ -23,6 +23,38 @@ def load_config(config_path: Path) -> dict[str, Any]:
         return tomllib.load(f)
 
 
+def _load_venue_aliases(llm: dict[str, Any]) -> tuple[tuple[str, str], ...]:
+    raw_aliases = llm.get("venue_aliases")
+    if raw_aliases is None:
+        return ()
+    if not isinstance(raw_aliases, list):
+        raise OrganizerError(
+            "Invalid config: llm.venue_aliases must be an array of [alias, abbr]"
+        )
+
+    parsed_aliases: list[tuple[str, str]] = []
+    for index, item in enumerate(raw_aliases):
+        if (
+            not isinstance(item, list)
+            or len(item) != 2
+            or not isinstance(item[0], str)
+            or not isinstance(item[1], str)
+        ):
+            raise OrganizerError(
+                f"Invalid config: llm.venue_aliases[{index}] must be [alias, abbr]"
+            )
+
+        alias = " ".join(item[0].split()).lower()
+        abbr = item[1].strip()
+        if not alias or not abbr:
+            raise OrganizerError(
+                f"Invalid config: llm.venue_aliases[{index}] has empty alias or abbr"
+            )
+        parsed_aliases.append((alias, abbr))
+
+    return tuple(parsed_aliases)
+
+
 def setup_logger(log_file: Path) -> logging.Logger:
     log_file.parent.mkdir(parents=True, exist_ok=True)
     logger = logging.getLogger("paper_organizer")
@@ -148,6 +180,7 @@ def main() -> None:
         )
 
     metadata_model_raw = llm.get("metadata_model")
+    venue_aliases = _load_venue_aliases(llm)
 
     inbox_dir = _expand(str(inbox_raw))
     log_file = _expand(str(log_file_raw))
@@ -167,6 +200,7 @@ def main() -> None:
         metadata_model=str(metadata_model_raw or summary_model_raw),
         request_timeout=int(llm.get("request_timeout", 60)),
         debug=bool(llm.get("debug", False)),
+        venue_aliases=venue_aliases,
     )
 
     processed_path = config_path.parent / ".processed"

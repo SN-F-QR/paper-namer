@@ -54,7 +54,7 @@ def test_llm_real_generate_title_and_summary_with_real_pdf():
     print(
         "[TEST][meta] "
         f"source={meta.get('source')} "
-        f"year={meta.get('year')} "
+        f"venue_year={meta.get('year')} "
         f"title={meta.get('title')} "
         f"has_abstract={bool(meta.get('abstract'))}",
         flush=True,
@@ -88,6 +88,7 @@ def test_llm_real_generate_title_and_summary_with_real_pdf():
             {
                 "pdf": pdf_path.name,
                 "meta_source": meta["source"],
+                "venue_year": meta["year"],
                 "title_input": meta["title"],
                 "title_zh": title,
                 "summary": summary,

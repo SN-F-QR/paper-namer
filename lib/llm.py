@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from ollama import ChatResponse, Client
@@ -25,11 +25,13 @@ class LLMConfig:
     metadata_model: str | None = None
     request_timeout: int = 60
     debug: bool = False
+    venue_aliases: tuple[tuple[str, str], ...] = field(default_factory=tuple)
 
 
 class ExtractedMetadata(BaseModel):
     title: str
     abstract: str
+    venue: str
     year: str
 
 
@@ -71,11 +73,101 @@ def _truncate_for_filename(title: str, max_len: int = 50) -> str:
     return clean[:max_len].strip() or "untitled"
 
 
+def _to_one_line(text: str, *, max_len: int = 600) -> str:
+    normalized = " ".join((text or "").split())
+    if len(normalized) <= max_len:
+        return normalized
+    return f"{normalized[: max_len - 3]}..."
+
+
+YEAR_PATTERN = re.compile(r"(19|20)\d{2}")
+VENUE_STOPWORDS = {
+    "a",
+    "an",
+    "and",
+    "annual",
+    "conference",
+    "for",
+    "in",
+    "international",
+    "journal",
+    "of",
+    "on",
+    "proceedings",
+    "symposium",
+    "the",
+    "transactions",
+    "workshop",
+}
+
+
 def _normalize_year(year_text: str) -> str:
-    matched = re.search(r"(19|20)\d{2}", year_text or "")
+    matched = YEAR_PATTERN.search(year_text or "")
     if not matched:
-        return "未知"
+        return ""
     return matched.group(0)
+
+
+def _normalize_venue_abbr(
+    venue_text: str,
+    venue_aliases: tuple[tuple[str, str], ...],
+) -> str:
+    compact = " ".join((venue_text or "").split())
+    if not compact:
+        return ""
+
+    # Handle direct acronym responses like "chi" / "uist" first.
+    compact_token = re.sub(r"[^A-Za-z0-9]", "", compact)
+    if re.fullmatch(r"[A-Za-z][A-Za-z0-9]{1,9}", compact_token):
+        candidate = re.sub(r"(?:19|20)\d{2}$|\d{2}$", "", compact_token.upper())
+        if len(candidate) >= 2 and not candidate.isdigit():
+            return candidate
+
+    lowered = compact.lower()
+    for alias, abbr in venue_aliases:
+        if alias in lowered:
+            return abbr
+
+    bracketed = re.search(r"\(([A-Za-z][A-Za-z0-9]{1,9})\)", compact)
+    if bracketed:
+        candidate = re.sub(r"[^A-Za-z0-9]", "", bracketed.group(1)).upper()
+        candidate = re.sub(r"(?:19|20)\d{2}$|\d{2}$", "", candidate)
+        if len(candidate) >= 2:
+            return candidate
+
+    token_pattern = re.compile(r"\b[A-Z][A-Z0-9]{1,9}\b")
+    for token in token_pattern.findall(compact):
+        candidate = re.sub(r"(?:19|20)\d{2}$|\d{2}$", "", token.upper())
+        if len(candidate) >= 2 and not candidate.isdigit():
+            return candidate
+
+    words = re.findall(r"[A-Za-z]+", compact)
+    if not words:
+        return ""
+
+    meaningful = [word for word in words if word.lower() not in VENUE_STOPWORDS]
+    selected = meaningful or words
+    initials = "".join(word[0].upper() for word in selected[:5])
+    if len(initials) < 2:
+        return selected[0][:4].upper()
+    return initials[:8]
+
+
+def _build_venue_year_tag(
+    venue_text: str,
+    year_text: str,
+    venue_aliases: tuple[tuple[str, str], ...],
+) -> str:
+    year_full = _normalize_year(year_text) or _normalize_year(venue_text)
+    venue_abbr = _normalize_venue_abbr(venue_text, venue_aliases)
+
+    if not venue_abbr and not year_full:
+        return "未知"
+    if not venue_abbr:
+        venue_abbr = "UNK"
+    if not year_full:
+        return f"{venue_abbr}XX"
+    return f"{venue_abbr}{year_full[-2:]}"
 
 
 def _ollama_chat_json(
@@ -90,9 +182,11 @@ def _ollama_chat_json(
     client = Client(host=host, timeout=timeout_seconds)
     if debug:
         LOGGER.info(
-            "[LLM][request] "
-            f"host={host} model={model} timeout={timeout_seconds}s "
-            f"prompt={prompt}",
+            "[LLM][request] host=%s model=%s timeout=%ss prompt=%s",
+            host,
+            model,
+            timeout_seconds,
+            _to_one_line(prompt),
         )
     try:
         response: ChatResponse = client.chat(
@@ -100,14 +194,19 @@ def _ollama_chat_json(
             messages=[{"role": "user", "content": prompt}],
             format=response_schema,
             think=False,
-            options={"temperature": 0},
+            options={"temperature": 0.2, "num_ctx": 8192},
         )
     except Exception as exc:
         raise LLMError(f"Ollama unavailable: {exc}") from exc
 
     content = response.message.content or "{}"
     if debug:
-        LOGGER.info("[LLM][response] model=%s content=%s", model, content)
+        LOGGER.info(
+            "[LLM][response] model=%s chars=%d content=%s",
+            model,
+            len(content),
+            _to_one_line(content),
+        )
     return content
 
 
@@ -148,12 +247,19 @@ def _normalize_json_text(content: str) -> str:
     raise LLMError("LLM returned invalid JSON payload")
 
 
-def _parse_metadata(content: str) -> tuple[str, str, str]:
+def _parse_metadata(
+    content: str,
+    venue_aliases: tuple[tuple[str, str], ...],
+) -> tuple[str, str, str]:
     try:
         data = ExtractedMetadata.model_validate_json(_normalize_json_text(content))
         title = data.title.strip()
         abstract = data.abstract.strip()
-        year = _normalize_year(data.year.strip())
+        venue_year = _build_venue_year_tag(
+            data.venue.strip(),
+            data.year.strip(),
+            venue_aliases,
+        )
     except Exception:
         try:
             payload = json.loads(_normalize_json_text(content))
@@ -174,20 +280,33 @@ def _parse_metadata(content: str) -> tuple[str, str, str]:
                 ("properties", "abstract", "title"),
             ),
         )
-        year = _normalize_year(
-            _extract_first_string(
-                payload,
-                (
-                    ("year",),
-                    ("properties", "year", "title"),
-                ),
-            )
+        venue_text = _extract_first_string(
+            payload,
+            (
+                ("venue",),
+                ("venue_abbr",),
+                ("conference",),
+                ("journal",),
+                ("publication",),
+                ("properties", "venue", "title"),
+                ("properties", "venue_abbr", "title"),
+                ("properties", "conference", "title"),
+                ("properties", "journal", "title"),
+            ),
         )
+        year_text = _extract_first_string(
+            payload,
+            (
+                ("year",),
+                ("properties", "year", "title"),
+            ),
+        )
+        venue_year = _build_venue_year_tag(venue_text, year_text, venue_aliases)
 
     if not title:
         raise LLMError("title missing from metadata response")
 
-    return title, abstract, year
+    return title, abstract, venue_year
 
 
 def extract_metadata_from_text(
@@ -218,7 +337,8 @@ def extract_metadata_from_text(
     metadata_schema = ExtractedMetadata.model_json_schema()
     prompt = (
         "从给定论文正文片段中提取结构化元信息。\n"
-        "要求：year 仅输出4位年份（找不到写'未知'）；title 保留原文语言；abstract 尽量提取摘要正文。\n"
+        "要求：venue 输出会议或期刊缩写（如 CHI、UIST、ISMAR、VR，未知填 UNK）；"
+        "year 输出4位年份（未知填'未知'）；title 保留原文语言；abstract 尽量提取摘要正文。\n"
         "只输出一个合法 JSON 对象，不要使用 Markdown 代码块，不要输出任何额外文本。\n"
         f"JSON Schema: {json.dumps(metadata_schema, ensure_ascii=False)}\n\n"
         f"正文片段（来自PDF前几页）：{text_for_prompt}"
@@ -237,7 +357,7 @@ def extract_metadata_from_text(
                 response_schema=metadata_schema,
                 debug=config.debug,
             )
-            title, abstract, year = _parse_metadata(content)
+            title, abstract, year = _parse_metadata(content, config.venue_aliases)
             return {
                 "title": title,
                 "abstract": abstract,
