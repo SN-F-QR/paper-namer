@@ -1,0 +1,50 @@
+[paths]
+inbox_dir = "~/Downloads/papers"
+log_file = "~/Downloads/papers/organizer.log"
+
+[llm]
+enabled = true
+metadata_model = "qwen3.5:0.8b"
+translate_model = "qwen3.5:0.8b"
+summary_model = "qwen3.5:0.8b"
+ollama_host = "http://localhost:11434"
+request_timeout = 60
+debug = false
+venue_aliases = [
+	["human factors in computing systems", "CHI"],
+	["user interface software and technology", "UIST"],
+	["computer supported cooperative work and social computing", "CSCW"],
+	["ubiquitous computing", "UbiComp"],
+	["interactive, mobile, wearable and ubiquitous technologies", "IMWUT"],
+	["intelligent user interfaces", "IUI"],
+	["human-computer interaction with mobile devices and services", "MobileHCI"],
+	["designing interactive systems", "DIS"],
+	["tangible, embedded, and embodied interaction", "TEI"],
+	["interaction design and children", "IDC"],
+	["human-robot interaction", "HRI"],
+	["computers and accessibility", "ASSETS"],
+	["interactive surfaces and spaces", "ISS"],
+	["wearable computers", "ISWC"],
+	["augmented reality", "ISMAR"],
+	["virtual reality software and technology", "VRST"],
+	["engineering interactive computing systems", "EICS"],
+	["interactive media experiences", "IMX"],
+	["groupwork", "GROUP"],
+	["transactions on computer-human interaction", "TOCHI"],
+	["international journal of human-computer studies", "IJHCS"],
+	["human-computer interaction", "HCIJ"],
+	["proceedings of the acm on human-computer interaction", "PACMHCI"],
+	["interacting with computers", "IWC"],
+	["international journal of human-computer interaction", "IJHCI"],
+	["transactions on interactive intelligent systems", "TiiS"],
+	["behaviour & information technology", "BIT"],
+	["transactions on human-robot interaction", "THRI"],
+	["pervasive and mobile computing", "PMC"],
+	["ieee transactions on visualization and computer graphics", "TVCG"],
+]
+
+[behavior]
+write_index = true
+add_summary = true
+extract_pages = 3
+dry_run = false
