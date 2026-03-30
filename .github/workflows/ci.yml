@@ -1,0 +1,122 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version-file: .python-version
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            pyproject.toml
+
+      - name: Sync dependencies
+        run: uv sync --all-groups
+
+      - name: Run Ruff checks
+        run: |
+          uv run ruff check --output-format=github .
+          uv run ruff format --check .
+
+  test:
+    runs-on: ubuntu-latest
+    needs: lint
+    timeout-minutes: 45
+    env:
+      OLLAMA_HOST: http://127.0.0.1:11434
+      OLLAMA_MODEL: qwen3.5:0.8b
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version-file: .python-version
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            pyproject.toml
+
+      - name: Sync dependencies
+        run: uv sync --all-groups
+
+      - name: Restore Ollama model cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.ollama/models
+          key: ${{ runner.os }}-ollama-model-qwen3.5-0.8b-v1
+          restore-keys: |
+            ${{ runner.os }}-ollama-model-
+
+      - name: Install Ollama
+        run: curl -fsSL https://ollama.com/install.sh | sh
+
+      - name: Start Ollama service
+        run: |
+          mkdir -p ~/.ollama/models
+          nohup ollama serve > "$RUNNER_TEMP/ollama.log" 2>&1 &
+          echo "OLLAMA_LOG=$RUNNER_TEMP/ollama.log" >> "$GITHUB_ENV"
+
+      - name: Wait for Ollama to be ready
+        run: |
+          for i in {1..30}; do
+            if curl -fsS "$OLLAMA_HOST/api/tags" >/dev/null; then
+              echo "Ollama is ready."
+              exit 0
+            fi
+            echo "[$i/30] Waiting for Ollama..."
+            sleep 2
+          done
+
+          echo "Ollama failed to start."
+          cat "$OLLAMA_LOG" || true
+          exit 1
+
+      - name: Ensure test model is available
+        run: |
+          if ollama list | awk 'NR>1 {print $1}' | grep -Fx "$OLLAMA_MODEL" >/dev/null; then
+            echo "Model already cached: $OLLAMA_MODEL"
+          else
+            echo "Pulling model: $OLLAMA_MODEL"
+            ollama pull "$OLLAMA_MODEL"
+          fi
+
+      - name: Verify Ollama API and model
+        run: |
+          curl -fsS "$OLLAMA_HOST/api/version"
+          curl -fsS "$OLLAMA_HOST/api/tags"
+          ollama show "$OLLAMA_MODEL" >/dev/null
+
+      - name: Run tests
+        run: uv run pytest tests/ -v -ra
+
+      - name: Upload Ollama log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ollama-log
+          path: ${{ runner.temp }}/ollama.log
