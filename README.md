@@ -1,6 +1,6 @@
-# paper-organizer
+# Paper Renamer
 
-An offline tool to organize academic PDFs: uses a local Ollama LLM to extract metadata, generate Chinese titles and summaries, rename files, and update an index.
+An offline tool to organize and rename academic PDFs: uses a local Ollama LLM to extract metadata, generate Chinese titles and summaries, rename files, and update an index.
 
 ## Features
 
