@@ -73,7 +73,7 @@ PDF → extractor.py (PyMuPDF4LLM, first N pages)
 - Extract raw text from first 3 pages and pass to LLM — no DOI lookup, no CrossRef API
 - LLM does three separate calls: (1) extract metadata, (2) translate title, (3) summarize
 - When Ollama is unreachable, fall back to largest-font text block as title; no translation
-- Idempotency via MD5 of first 4 KB; processed hashes stored in `.processed` (JSON)
+- Idempotency via full-file SHA-256; processed hashes stored in `.processed` (JSON)
 
 **Example Snippets**
 

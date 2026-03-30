@@ -9,6 +9,7 @@ from .errors import RenamerError
 
 
 INVALID_CHARS = re.compile(r"[\\/*?:\"<>|]")
+HASH_CHUNK_SIZE = 1024 * 1024
 
 
 def sanitize(title: str, max_len: int = 60) -> str:
@@ -40,13 +41,14 @@ class ProcessedStore:
         )
 
     def compute_hash(self, pdf_path: Path) -> str:
-        md5 = hashlib.md5(usedforsecurity=False)
+        sha256 = hashlib.sha256()
         try:
             with pdf_path.open("rb") as f:
-                md5.update(f.read(4096))
+                while chunk := f.read(HASH_CHUNK_SIZE):
+                    sha256.update(chunk)
         except OSError as exc:
             raise RenamerError(f"Cannot read file for hash: {pdf_path}") from exc
-        return md5.hexdigest()
+        return f"sha256:{sha256.hexdigest()}"
 
     def is_processed(self, content_hash: str) -> bool:
         return content_hash in self._cache

@@ -46,3 +46,14 @@ def test_idempotent_hash_tracking(tmp_path: Path):
 
     existing_hash = list(raw.keys())[0]
     assert store.is_processed(existing_hash)
+
+
+def test_compute_hash_uses_full_file_content(tmp_path: Path):
+    prefix = b"A" * 4096
+    file_a = tmp_path / "a.pdf"
+    file_b = tmp_path / "b.pdf"
+    file_a.write_bytes(prefix + b"tail-a")
+    file_b.write_bytes(prefix + b"tail-b")
+
+    store = ProcessedStore(tmp_path / ".processed")
+    assert store.compute_hash(file_a) != store.compute_hash(file_b)
