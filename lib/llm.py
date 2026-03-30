@@ -382,14 +382,28 @@ def extract_metadata_from_text(
     return fallback_meta
 
 
-def _translate_title(title: str, config: LLMConfig) -> str:
+def _translate_title(title: str, abstract: str, config: LLMConfig) -> str:
     title_for_prompt = " ".join((title or "").split())[:400]
+    abstract_for_prompt = " ".join((abstract or "").split())[:3000]
     title_schema = TranslatedTitle.model_json_schema()
     prompt = (
-        "请把下面论文标题翻译成中文。要求：不超过30字，适合作文件名，不含特殊符号。\n"
-        "只输出一个合法 JSON 对象，不要使用 Markdown 代码块，不要输出任何额外文本。\n"
+        "请把下面论文标题翻译成中文。请严格遵守以下要求：\n"
+        "1. 简明扼要，不超过30字，必须适合作文件名。\n"
+        "2. 去除冒号、问号、斜杠等不合法或不建议用作文件名的特殊符号（可用空格或连字符 '-' 替代）。\n"
+        "3. 保留框架名、专有名词或缩写（如 AgentAR、LLM 等）以增强辨识度，不要强行翻译。\n"
+        "4. 必须结合摘要理解术语语义与词性（如 Authoring 常作动词“创作/构建/编写”，不要生硬翻译为“作者”）。\n"
+        "5. 若标题存在歧义，以摘要中的研究任务、方法与对象为准。\n\n"
+        "【参考示例】\n"
+        "原标题：AgentAR: A Framework for Authoring Augmented Reality Experiences\n"
+        "翻译为：AgentAR 创作增强现实体验的框架\n\n"
+        "原标题：Do Large Language Models Understand Graph Topology?\n"
+        "翻译为：大语言模型是否理解图拓扑\n\n"
+        "原标题：Direct Preference Optimization: Your Language Model is Secretly a Reward Model\n"
+        "翻译为：DPO 直接偏好优化 你的语言模型暗中是个奖励模型\n\n"
+        "只输出一个合法的 JSON 对象，不要使用 Markdown 代码块，不要输出任何额外文本。\n"
         f"JSON Schema: {json.dumps(title_schema, ensure_ascii=False)}\n\n"
-        f"原标题：{title_for_prompt}"
+        f"原标题：{title_for_prompt}\n"
+        f"摘要：{abstract_for_prompt}"
     )
 
     def _request_translation(request_prompt: str) -> str:
@@ -430,9 +444,11 @@ def _translate_title(title: str, config: LLMConfig) -> str:
     retry_prompt = (
         "你上一次输出没有翻译成中文，请重新翻译。\n"
         "要求：title_zh 必须包含至少一个中文汉字；不要原样返回英文标题。\n"
+        "并且请结合摘要语境来消歧，不要仅做字面直译。\n"
         "只输出一个合法 JSON 对象，不要使用 Markdown 代码块，不要输出任何额外文本。\n"
         f"JSON Schema: {json.dumps(title_schema, ensure_ascii=False)}\n\n"
-        f"原标题：{title_for_prompt}"
+        f"原标题：{title_for_prompt}\n"
+        f"摘要：{abstract_for_prompt}"
     )
     translated = _request_translation(retry_prompt)
     if not _contains_cjk(translated):
@@ -495,7 +511,7 @@ def generate_chinese_metadata(
         return fallback_title, fallback_summary
 
     try:
-        zh_title = _translate_title(meta["title"], config)
+        zh_title = _translate_title(meta["title"], meta.get("abstract", ""), config)
     except LLMError as exc:
         if logger:
             logger.warning("Title translation fallback: %s", exc)

@@ -239,3 +239,43 @@ def test_llm_retry_when_first_title_is_not_chinese(monkeypatch):
 
     assert title == "LLM辅助评测协同设计"
     assert summary == "未生成摘要"
+
+
+def test_title_translation_prompt_includes_abstract(monkeypatch):
+    config = LLMConfig(
+        enabled=True,
+        translate_model="qwen3.5:0.8b",
+        summary_model="qwen3.5:9b",
+        ollama_host="http://localhost:11434",
+    )
+    meta: PaperMeta = {
+        "title": "Authoring Tools for XR Learning",
+        "abstract": "We present a system for authoring XR lessons with teacher-in-the-loop design.",
+        "year": "2026",
+        "source": "llm",
+    }
+
+    captured_prompts: list[str] = []
+
+    def _mock_chat(*args, **kwargs):
+        prompt = kwargs.get("prompt")
+        if not isinstance(prompt, str) and len(args) >= 3 and isinstance(args[2], str):
+            prompt = args[2]
+        if isinstance(prompt, str):
+            captured_prompts.append(prompt)
+        return '{"title_zh": "XR学习课程创作工具"}'
+
+    monkeypatch.setattr("lib.llm._ollama_chat_json", _mock_chat)
+
+    title, summary = generate_chinese_metadata(
+        meta,
+        config=config,
+        add_summary=False,
+        strict=True,
+    )
+
+    assert title == "XR学习课程创作工具"
+    assert summary == "未生成摘要"
+    assert captured_prompts
+    assert "结合摘要" in captured_prompts[0]
+    assert "摘要：We present a system for authoring XR lessons" in captured_prompts[0]
