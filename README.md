@@ -9,7 +9,8 @@ An offline tool to organize and rename academic PDFs: uses a local Ollama LLM to
 - Use a local Ollama model to extract year/title and other metadata
 - Translate English titles to Chinese and generate summaries
 - Rename files to `YEAR_ChineseTitle.pdf` (auto-suffix on collisions)
-- Append entries to `_index.md` and use `.processed` to avoid reprocessing
+- Append entries to `_index.md` and use per-directory `.processed` to avoid reprocessing
+- Reconcile stale records on each run (missing/changed files are removed from `.processed` and `_index.md`)
 
 ## Quick Start
 

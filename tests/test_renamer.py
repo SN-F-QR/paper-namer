@@ -57,3 +57,42 @@ def test_compute_hash_uses_full_file_content(tmp_path: Path):
 
     store = ProcessedStore(tmp_path / ".processed")
     assert store.compute_hash(file_a) != store.compute_hash(file_b)
+
+
+def test_cleanup_stale_entries_removes_deleted_file_record(tmp_path: Path):
+    keep = tmp_path / "keep.pdf"
+    keep.write_bytes(b"keep")
+    gone = tmp_path / "gone.pdf"
+    gone.write_bytes(b"gone")
+
+    store = ProcessedStore(tmp_path / ".processed")
+    keep_hash = store.compute_hash(keep)
+    gone_hash = store.compute_hash(gone)
+    store.mark_processed(keep_hash, keep.name)
+    store.mark_processed(gone_hash, gone.name)
+
+    gone.unlink()
+
+    removed = store.cleanup_stale_entries(tmp_path, dry_run=False)
+    assert removed == [gone.name]
+
+    raw = json.loads((tmp_path / ".processed").read_text(encoding="utf-8"))
+    assert keep_hash in raw
+    assert gone_hash not in raw
+
+
+def test_cleanup_stale_entries_removes_changed_file_record(tmp_path: Path):
+    paper = tmp_path / "paper.pdf"
+    paper.write_bytes(b"version-1")
+
+    store = ProcessedStore(tmp_path / ".processed")
+    old_hash = store.compute_hash(paper)
+    store.mark_processed(old_hash, paper.name)
+
+    paper.write_bytes(b"version-2")
+
+    removed = store.cleanup_stale_entries(tmp_path, dry_run=False)
+    assert removed == [paper.name]
+
+    raw = json.loads((tmp_path / ".processed").read_text(encoding="utf-8"))
+    assert old_hash not in raw

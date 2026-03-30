@@ -9,7 +9,7 @@ import tomllib
 
 from lib.errors import OrganizerError
 from lib.extractor import extract_pdf_text
-from lib.index_writer import append_index_entry
+from lib.index_writer import append_index_entry, remove_index_entries
 from lib.llm import LLMConfig, extract_metadata_from_text, generate_chinese_metadata
 from lib.renamer import ProcessedStore, rename_pdf
 
@@ -141,6 +141,7 @@ def process_one_pdf(
                 index_path=pdf_path.parent / "_index.md",
                 year=meta["year"],
                 zh_title=zh_title,
+                file_name=new_path.name,
                 original_title=meta["title"],
                 source=meta["source"],
                 summary=summary,
@@ -152,6 +153,34 @@ def process_one_pdf(
         logger.warning("Failed processing %s: %s", pdf_path.name, exc)
     except Exception as exc:  # defensive catch to protect batch processing
         logger.warning("Unexpected error on %s: %s", pdf_path.name, exc)
+
+
+def reconcile_directory_state(
+    directory: Path,
+    *,
+    logger: logging.Logger,
+    processed: ProcessedStore,
+    write_index: bool,
+    dry_run: bool,
+) -> None:
+    stale_filenames = processed.cleanup_stale_entries(directory, dry_run=dry_run)
+    if not stale_filenames:
+        return
+
+    removed_index_entries: list[str] = []
+    if write_index:
+        removed_index_entries = remove_index_entries(
+            index_path=directory / "_index.md",
+            filenames=stale_filenames,
+            dry_run=dry_run,
+        )
+
+    logger.info(
+        "Reconciled stale records in %s: processed_removed=%d, index_removed=%d",
+        directory,
+        len(stale_filenames),
+        len(removed_index_entries),
+    )
 
 
 def main() -> None:
@@ -203,15 +232,61 @@ def main() -> None:
         venue_aliases=venue_aliases,
     )
 
-    processed_path = config_path.parent / ".processed"
-    processed = ProcessedStore(processed_path)
-
     if args.file:
         pdf_files = [Path(args.file).expanduser().resolve()]
     else:
         pdf_files = sorted(inbox_dir.glob("*.pdf"))
 
+    valid_pdf_files: list[Path] = []
     for pdf_path in pdf_files:
+        if pdf_path.exists() and pdf_path.suffix.lower() == ".pdf":
+            valid_pdf_files.append(pdf_path)
+        else:
+            logger.warning("Skip non-pdf or missing path: %s", pdf_path)
+
+    directories_to_init: set[Path]
+    if args.file:
+        directories_to_init = {pdf_path.parent for pdf_path in valid_pdf_files}
+    else:
+        directories_to_init = {inbox_dir}
+
+    processed_by_dir: dict[Path, ProcessedStore] = {}
+    for directory in sorted(directories_to_init):
+        processed = ProcessedStore(directory / ".processed")
+        processed_by_dir[directory] = processed
+        try:
+            reconcile_directory_state(
+                directory,
+                logger=logger,
+                processed=processed,
+                write_index=write_index,
+                dry_run=dry_run,
+            )
+        except OrganizerError as exc:
+            logger.warning("Failed reconciling %s: %s", directory, exc)
+        except Exception as exc:  # defensive catch to protect batch processing
+            logger.warning("Unexpected reconcile error on %s: %s", directory, exc)
+
+    for pdf_path in valid_pdf_files:
+        processed = processed_by_dir.get(pdf_path.parent)
+        if processed is None:
+            processed = ProcessedStore(pdf_path.parent / ".processed")
+            processed_by_dir[pdf_path.parent] = processed
+            try:
+                reconcile_directory_state(
+                    pdf_path.parent,
+                    logger=logger,
+                    processed=processed,
+                    write_index=write_index,
+                    dry_run=dry_run,
+                )
+            except OrganizerError as exc:
+                logger.warning("Failed reconciling %s: %s", pdf_path.parent, exc)
+            except Exception as exc:  # defensive catch to protect batch processing
+                logger.warning(
+                    "Unexpected reconcile error on %s: %s", pdf_path.parent, exc
+                )
+
         process_one_pdf(
             pdf_path,
             logger=logger,

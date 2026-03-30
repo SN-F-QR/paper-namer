@@ -53,6 +53,30 @@ class ProcessedStore:
     def is_processed(self, content_hash: str) -> bool:
         return content_hash in self._cache
 
+    def cleanup_stale_entries(self, directory: Path, *, dry_run: bool) -> list[str]:
+        stale_hashes: list[str] = []
+        stale_filenames: list[str] = []
+
+        for stored_hash, filename in self._cache.items():
+            tracked_path = directory / filename
+            if not tracked_path.exists():
+                stale_hashes.append(stored_hash)
+                stale_filenames.append(filename)
+                continue
+
+            current_hash = self.compute_hash(tracked_path)
+            if current_hash != stored_hash:
+                stale_hashes.append(stored_hash)
+                stale_filenames.append(filename)
+
+        if stale_hashes and not dry_run:
+            for stale_hash in stale_hashes:
+                self._cache.pop(stale_hash, None)
+            self._save()
+
+        # Preserve order while removing duplicates.
+        return list(dict.fromkeys(stale_filenames))
+
     def mark_processed(self, content_hash: str, new_filename: str) -> None:
         self._cache[content_hash] = new_filename
         self._save()

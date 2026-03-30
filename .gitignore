@@ -14,6 +14,3 @@ tests/.generated/
 
 config.toml
 .vscode/
-
-# Outputs
-.processed
