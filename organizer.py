@@ -7,7 +7,7 @@ from typing import Any
 
 import tomllib
 
-from lib.errors import OrganizerError
+from lib.errors import LLMBackendUnavailableError, OrganizerError
 from lib.extractor import extract_pdf_text
 from lib.index_writer import append_index_entry, remove_index_entries
 from lib.llm import LLMConfig, extract_metadata_from_text, generate_chinese_metadata
@@ -149,6 +149,9 @@ def process_one_pdf(
             )
 
         logger.info("Processed: %s -> %s", pdf_path.name, new_path.name)
+    except LLMBackendUnavailableError as exc:
+        logger.error("LLM backend unavailable, aborting batch: %s", exc)
+        raise
     except OrganizerError as exc:
         logger.warning("Failed processing %s: %s", pdf_path.name, exc)
     except Exception as exc:  # defensive catch to protect batch processing
@@ -287,16 +290,19 @@ def main() -> None:
                     "Unexpected reconcile error on %s: %s", pdf_path.parent, exc
                 )
 
-        process_one_pdf(
-            pdf_path,
-            logger=logger,
-            processed=processed,
-            extract_pages=extract_pages,
-            llm_config=llm_config,
-            add_summary=add_summary,
-            write_index=write_index,
-            dry_run=dry_run,
-        )
+        try:
+            process_one_pdf(
+                pdf_path,
+                logger=logger,
+                processed=processed,
+                extract_pages=extract_pages,
+                llm_config=llm_config,
+                add_summary=add_summary,
+                write_index=write_index,
+                dry_run=dry_run,
+            )
+        except LLMBackendUnavailableError:
+            raise SystemExit(1)
 
     logger.info("Done. total=%d", len(pdf_files))
 

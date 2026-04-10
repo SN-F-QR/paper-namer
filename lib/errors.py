@@ -10,6 +10,10 @@ class LLMError(OrganizerError):
     """LLM request or parsing failed."""
 
 
+class LLMBackendUnavailableError(LLMError):
+    """LLM backend is unreachable or returned transport-level failure."""
+
+
 class RenamerError(OrganizerError):
     """Rename operation failed."""
 

@@ -1,5 +1,5 @@
 from lib.extractor import PaperMeta
-from lib.errors import LLMError
+from lib.errors import LLMBackendUnavailableError, LLMError
 from lib.llm import (
     LLMConfig,
     extract_metadata_from_text,
@@ -58,6 +58,35 @@ def test_extract_metadata_json_retry_then_fallback(monkeypatch):
     assert calls["count"] == 2
     assert meta["source"] == "fallback"
     assert meta["title"] == "Fallback Title"
+
+
+def test_extract_metadata_backend_unavailable_raises(monkeypatch):
+    config = LLMConfig(
+        enabled=True,
+        translate_model="qwen3.5:0.8b",
+        summary_model="qwen3.5:9b",
+        ollama_host="http://localhost:11434",
+    )
+
+    calls = {"count": 0}
+
+    def _raise_backend(*args, **kwargs):
+        calls["count"] += 1
+        raise LLMBackendUnavailableError("Ollama unavailable: 404")
+
+    monkeypatch.setattr("lib.llm._ollama_chat_json", _raise_backend)
+
+    try:
+        extract_metadata_from_text(
+            "title abstract content",
+            fallback_title="Fallback Title",
+            config=config,
+        )
+        raise AssertionError("Expected backend unavailable error to be raised")
+    except LLMBackendUnavailableError:
+        pass
+
+    assert calls["count"] == 2
 
 
 def test_extract_metadata_success(monkeypatch):
@@ -279,3 +308,34 @@ def test_title_translation_prompt_includes_abstract(monkeypatch):
     assert captured_prompts
     assert "结合摘要" in captured_prompts[0]
     assert "摘要：We present a system for authoring XR lessons" in captured_prompts[0]
+
+
+def test_generate_chinese_metadata_backend_unavailable_raises(monkeypatch):
+    config = LLMConfig(
+        enabled=True,
+        translate_model="qwen3.5:0.8b",
+        summary_model="qwen3.5:9b",
+        ollama_host="http://localhost:11434",
+    )
+    meta: PaperMeta = {
+        "title": "A Good Paper",
+        "abstract": "Some abstract",
+        "year": "CHI24",
+        "source": "llm",
+    }
+
+    def _raise_backend(*args, **kwargs):
+        raise LLMBackendUnavailableError("Ollama unavailable: timeout")
+
+    monkeypatch.setattr("lib.llm._ollama_chat_json", _raise_backend)
+
+    try:
+        generate_chinese_metadata(
+            meta,
+            config=config,
+            add_summary=True,
+            strict=False,
+        )
+        raise AssertionError("Expected backend unavailable error to be raised")
+    except LLMBackendUnavailableError:
+        pass

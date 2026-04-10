@@ -9,7 +9,7 @@ from typing import Any, Literal
 from ollama import ChatResponse, Client
 from pydantic import BaseModel
 
-from .errors import LLMError
+from .errors import LLMBackendUnavailableError, LLMError
 from .extractor import PaperMeta
 
 
@@ -197,7 +197,7 @@ def _ollama_chat_json(
             options={"temperature": 0.2, "num_ctx": 8192},
         )
     except Exception as exc:
-        raise LLMError(f"Ollama unavailable: {exc}") from exc
+        raise LLMBackendUnavailableError(f"Ollama unavailable: {exc}") from exc
 
     content = response.message.content or "{}"
     if debug:
@@ -372,6 +372,9 @@ def extract_metadata_from_text(
     if logger and last_error is not None:
         logger.warning("Metadata extraction fallback: %s", last_error)
 
+    if isinstance(last_error, LLMBackendUnavailableError):
+        raise last_error
+
     if strict:
         if isinstance(last_error, LLMError):
             raise last_error
@@ -512,6 +515,8 @@ def generate_chinese_metadata(
 
     try:
         zh_title = _translate_title(meta["title"], meta.get("abstract", ""), config)
+    except LLMBackendUnavailableError:
+        raise
     except LLMError as exc:
         if logger:
             logger.warning("Title translation fallback: %s", exc)
@@ -524,6 +529,8 @@ def generate_chinese_metadata(
 
     try:
         summary = _summarize(meta["title"], meta["abstract"], config)
+    except LLMBackendUnavailableError:
+        raise
     except LLMError as exc:
         if logger:
             logger.warning("Summary fallback: %s", exc)
