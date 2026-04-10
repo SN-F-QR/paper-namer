@@ -4,12 +4,18 @@ import hashlib
 import json
 import re
 from pathlib import Path
+from typing import TypedDict
 
 from .errors import RenamerError
 
 
 INVALID_CHARS = re.compile(r"[\\/*?:\"<>|]")
 HASH_CHUNK_SIZE = 1024 * 1024
+
+
+class StaleProcessedEntry(TypedDict):
+    content_hash: str
+    filename: str
 
 
 def sanitize(title: str, max_len: int = 60) -> str:
@@ -53,29 +59,44 @@ class ProcessedStore:
     def is_processed(self, content_hash: str) -> bool:
         return content_hash in self._cache
 
-    def cleanup_stale_entries(self, directory: Path, *, dry_run: bool) -> list[str]:
+    def cleanup_stale_entries(
+        self, directory: Path, *, dry_run: bool
+    ) -> list[StaleProcessedEntry]:
         stale_hashes: list[str] = []
-        stale_filenames: list[str] = []
+        stale_entries: list[StaleProcessedEntry] = []
 
         for stored_hash, filename in self._cache.items():
             tracked_path = directory / filename
             if not tracked_path.exists():
                 stale_hashes.append(stored_hash)
-                stale_filenames.append(filename)
+                stale_entries.append(
+                    {"content_hash": stored_hash, "filename": filename}
+                )
                 continue
 
             current_hash = self.compute_hash(tracked_path)
             if current_hash != stored_hash:
                 stale_hashes.append(stored_hash)
-                stale_filenames.append(filename)
+                stale_entries.append(
+                    {"content_hash": stored_hash, "filename": filename}
+                )
 
         if stale_hashes and not dry_run:
             for stale_hash in stale_hashes:
                 self._cache.pop(stale_hash, None)
             self._save()
 
-        # Preserve order while removing duplicates.
-        return list(dict.fromkeys(stale_filenames))
+        # Preserve order while removing duplicate stale hashes.
+        unique_entries: list[StaleProcessedEntry] = []
+        seen_hashes: set[str] = set()
+        for entry in stale_entries:
+            entry_hash = entry["content_hash"]
+            if entry_hash in seen_hashes:
+                continue
+            unique_entries.append(entry)
+            seen_hashes.add(entry_hash)
+
+        return unique_entries
 
     def mark_processed(self, content_hash: str, new_filename: str) -> None:
         self._cache[content_hash] = new_filename

@@ -39,6 +39,45 @@ def test_remove_index_entries_by_filename(tmp_path: Path):
     assert "CHI25_第二篇" in text
 
 
+def test_remove_index_entries_by_id(tmp_path: Path):
+    index_path = tmp_path / "_index.md"
+
+    append_index_entry(
+        index_path=index_path,
+        year="CHI24",
+        zh_title="第一篇",
+        file_name="shared.pdf",
+        original_title="Paper One",
+        source="llm",
+        summary="摘要一",
+        paper_id="sha256:111",
+        dry_run=False,
+    )
+    append_index_entry(
+        index_path=index_path,
+        year="CHI25",
+        zh_title="第二篇",
+        file_name="shared.pdf",
+        original_title="Paper Two",
+        source="llm",
+        summary="摘要二",
+        paper_id="sha256:222",
+        dry_run=False,
+    )
+
+    removed = remove_index_entries(
+        index_path=index_path,
+        filenames=[],
+        paper_ids=["sha256:111"],
+        dry_run=False,
+    )
+
+    text = index_path.read_text(encoding="utf-8")
+    assert removed == ["CHI24_第一篇"]
+    assert "CHI24_第一篇" not in text
+    assert "CHI25_第二篇" in text
+
+
 def test_remove_index_entries_falls_back_to_legacy_header_match(tmp_path: Path):
     index_path = tmp_path / "_index.md"
     legacy = (

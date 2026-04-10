@@ -12,6 +12,7 @@ SECTION_PATTERN = re.compile(
     r"^## (?P<header>[^\n]+)\n\n(?P<body>.*?)(?:\n---\n\n|\Z)",
     re.MULTILINE | re.DOTALL,
 )
+ID_PATTERN = re.compile(r"^- \*\*ID\*\*:\s*(?P<id>.+?)\s*$", re.MULTILINE)
 FILENAME_PATTERN = re.compile(r"^- \*\*文件名\*\*:\s*(?P<name>.+?)\s*$", re.MULTILINE)
 
 
@@ -24,13 +25,16 @@ def append_index_entry(
     original_title: str,
     source: str,
     summary: str,
+    paper_id: str | None = None,
     dry_run: bool,
 ) -> None:
     timestamp = datetime.now().isoformat(timespec="seconds")
+    id_line = f"- **ID**: {paper_id}\n" if paper_id else ""
     section = (
         f"## {year}_{zh_title}\n\n"
         f"- **原标题**: {original_title}\n"
         f"- **来源**: {source}\n"
+        f"{id_line}"
         f"- **文件名**: {file_name}\n"
         f"- **核心贡献**: {summary}\n"
         f"- **处理时间**: {timestamp}\n\n"
@@ -57,14 +61,25 @@ def _section_filename(section_body: str) -> str | None:
     return match.group("name").strip()
 
 
+def _section_id(section_body: str) -> str | None:
+    match = ID_PATTERN.search(section_body)
+    if not match:
+        return None
+    return match.group("id").strip()
+
+
 def remove_index_entries(
     *,
     index_path: Path,
     filenames: list[str],
+    paper_ids: list[str] | None = None,
     dry_run: bool,
 ) -> list[str]:
     target_names = {name.strip() for name in filenames if name.strip()}
-    if not target_names or not index_path.exists():
+    target_ids = {
+        paper_id.strip() for paper_id in (paper_ids or []) if paper_id.strip()
+    }
+    if (not target_names and not target_ids) or not index_path.exists():
         return []
 
     target_headers = {Path(name).stem for name in target_names}
@@ -88,14 +103,16 @@ def remove_index_entries(
     for match in matches:
         header = match.group("header").strip()
         body = match.group("body").rstrip()
+        section_id = _section_id(body)
         section_file_name = _section_filename(body)
 
+        remove_by_id = section_id is not None and section_id in target_ids
         remove_by_filename = (
             section_file_name is not None and section_file_name in target_names
         )
         remove_by_header = header in target_headers
 
-        if remove_by_filename or remove_by_header:
+        if remove_by_id or remove_by_filename or remove_by_header:
             removed_headers.append(header)
             continue
 

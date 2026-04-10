@@ -74,7 +74,7 @@ def test_cleanup_stale_entries_removes_deleted_file_record(tmp_path: Path):
     gone.unlink()
 
     removed = store.cleanup_stale_entries(tmp_path, dry_run=False)
-    assert removed == [gone.name]
+    assert removed == [{"content_hash": gone_hash, "filename": gone.name}]
 
     raw = json.loads((tmp_path / ".processed").read_text(encoding="utf-8"))
     assert keep_hash in raw
@@ -92,7 +92,7 @@ def test_cleanup_stale_entries_removes_changed_file_record(tmp_path: Path):
     paper.write_bytes(b"version-2")
 
     removed = store.cleanup_stale_entries(tmp_path, dry_run=False)
-    assert removed == [paper.name]
+    assert removed == [{"content_hash": old_hash, "filename": paper.name}]
 
     raw = json.loads((tmp_path / ".processed").read_text(encoding="utf-8"))
     assert old_hash not in raw

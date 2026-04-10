@@ -145,6 +145,7 @@ def process_one_pdf(
                 original_title=meta["title"],
                 source=meta["source"],
                 summary=summary,
+                paper_id=content_hash,
                 dry_run=dry_run,
             )
 
@@ -166,22 +167,26 @@ def reconcile_directory_state(
     write_index: bool,
     dry_run: bool,
 ) -> None:
-    stale_filenames = processed.cleanup_stale_entries(directory, dry_run=dry_run)
-    if not stale_filenames:
+    stale_entries = processed.cleanup_stale_entries(directory, dry_run=dry_run)
+    if not stale_entries:
         return
+
+    stale_filenames = [entry["filename"] for entry in stale_entries]
+    stale_paper_ids = [entry["content_hash"] for entry in stale_entries]
 
     removed_index_entries: list[str] = []
     if write_index:
         removed_index_entries = remove_index_entries(
             index_path=directory / "_index.md",
             filenames=stale_filenames,
+            paper_ids=stale_paper_ids,
             dry_run=dry_run,
         )
 
     logger.info(
         "Reconciled stale records in %s: processed_removed=%d, index_removed=%d",
         directory,
-        len(stale_filenames),
+        len(stale_entries),
         len(removed_index_entries),
     )
 
