@@ -21,7 +21,7 @@ An offline tool to organize and rename academic PDFs: uses a local Ollama LLM to
 uv sync
 ```
 
-3. Edit `config.toml` as needed (paths, models, behavior flags).
+3. Edit `config.toml` as needed (paths, backend, models, behavior flags). Set `llm.backend = "lmstudio"` and `llm.lmstudio_model = "gemma-4-e4b"` to switch off Ollama.
 4. Dry run (no writes):
 
 ```bash

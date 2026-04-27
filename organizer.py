@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import tomllib
 
@@ -216,7 +216,17 @@ def main() -> None:
             "Missing required config: llm.translate_model and llm.summary_model"
         )
 
+    backend_raw = str(llm.get("backend", "ollama")).strip().lower()
+    if backend_raw not in {"ollama", "lmstudio"}:
+        raise OrganizerError("Invalid config: llm.backend must be ollama or lmstudio")
+    backend: Literal["ollama", "lmstudio"]
+    if backend_raw == "lmstudio":
+        backend = "lmstudio"
+    else:
+        backend = "ollama"
+
     metadata_model_raw = llm.get("metadata_model")
+    lmstudio_model_raw = llm.get("lmstudio_model")
     venue_aliases = _load_venue_aliases(llm)
 
     inbox_dir = _expand(str(inbox_raw))
@@ -231,9 +241,11 @@ def main() -> None:
 
     llm_config = LLMConfig(
         enabled=bool(llm.get("enabled", True)),
+        backend=backend,
         translate_model=str(translate_model_raw),
         summary_model=str(summary_model_raw),
         ollama_host=str(llm.get("ollama_host", "http://localhost:11434")),
+        lmstudio_model=str(lmstudio_model_raw or "gemma-4-e4b"),
         metadata_model=str(metadata_model_raw or summary_model_raw),
         request_timeout=int(llm.get("request_timeout", 60)),
         debug=bool(llm.get("debug", False)),

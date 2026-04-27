@@ -5,6 +5,7 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "lmstudio>=1.5.0",
     "ollama>=0.6.1",
     "pydantic>=2.12.5",
     "pymupdf>=1.27.2.2",

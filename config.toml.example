@@ -4,9 +4,11 @@ log_file = "~/Downloads/papers/organizer.log"
 
 [llm]
 enabled = true
+backend = "ollama"
 metadata_model = "qwen3.5:0.8b"
 translate_model = "qwen3.5:0.8b"
 summary_model = "qwen3.5:0.8b"
+lmstudio_model = "gemma-4-e4b"
 ollama_host = "http://localhost:11434"
 request_timeout = 60
 debug = false

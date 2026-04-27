@@ -2,6 +2,7 @@ from lib.extractor import PaperMeta
 from lib.errors import LLMBackendUnavailableError, LLMError
 from lib.llm import (
     LLMConfig,
+    _lmstudio_chat_json,
     extract_metadata_from_text,
     generate_chinese_metadata,
 )
@@ -115,6 +116,85 @@ def test_extract_metadata_success(monkeypatch):
     assert meta["title"] == "A Good Paper"
     assert meta["abstract"] == "A short abstract"
     assert meta["year"] == "CHI24"
+
+
+def test_lmstudio_backend_uses_lmstudio_calls(monkeypatch):
+    config = LLMConfig(
+        enabled=True,
+        backend="lmstudio",
+        translate_model="qwen3.5:0.8b",
+        summary_model="qwen3.5:9b",
+        ollama_host="http://localhost:11434",
+    )
+
+    responses = iter(
+        [
+            '{"title":"A Good Paper","abstract":"A short abstract","venue":"CHI","year":"2024"}',
+            '{"title_zh":"LM Studio 中文标题"}',
+            '{"summary":"本文总结了 LM Studio 后端的工作流程。"}',
+        ]
+    )
+    calls: list[str] = []
+
+    def _raise_ollama(*args, **kwargs):
+        raise AssertionError("Ollama backend should not be used when backend=lmstudio")
+
+    def _mock_lmstudio(*args, **kwargs):
+        calls.append(args[0] if args else "")
+        return next(responses)
+
+    monkeypatch.setattr("lib.llm._ollama_chat_json", _raise_ollama)
+    monkeypatch.setattr("lib.llm._lmstudio_chat_json", _mock_lmstudio)
+
+    meta = extract_metadata_from_text(
+        "content",
+        fallback_title="Fallback",
+        config=config,
+        strict=True,
+    )
+
+    title, summary = generate_chinese_metadata(
+        meta,
+        config=config,
+        add_summary=True,
+        strict=True,
+    )
+
+    assert meta["source"] == "llm"
+    assert meta["year"] == "CHI24"
+    assert title == "LM Studio 中文标题"
+    assert summary == "本文总结了 LM Studio 后端的工作流程。"
+    assert len(calls) == 3
+
+
+def test_lmstudio_model_falls_back_to_google_prefixed_name(monkeypatch):
+    calls: list[str] = []
+
+    class FakeResponse:
+        content = '{"title_zh":"LM Studio 中文标题"}'
+
+    class FakeModel:
+        def respond(self, history, **kwargs):
+            return FakeResponse()
+
+    def _mock_llm(model_key: str, *args, **kwargs):
+        calls.append(model_key)
+        if model_key == "gemma-4-e4b":
+            raise Exception("Model not found: gemma-4-e4b")
+        if model_key == "google/gemma-4-e4b":
+            return FakeModel()
+        raise AssertionError(f"Unexpected model key: {model_key}")
+
+    monkeypatch.setattr("lib.llm.lms.llm", _mock_llm)
+
+    content = _lmstudio_chat_json(
+        "gemma-4-e4b",
+        "请翻译标题",
+        timeout_seconds=5,
+    )
+
+    assert calls == ["gemma-4-e4b", "google/gemma-4-e4b"]
+    assert content == '{"title_zh":"LM Studio 中文标题"}'
 
 
 def test_extract_metadata_maps_full_venue_name_to_abbr(monkeypatch):

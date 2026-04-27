@@ -6,6 +6,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+import lmstudio as lms
 from ollama import ChatResponse, Client
 from pydantic import BaseModel
 
@@ -22,6 +23,8 @@ class LLMConfig:
     translate_model: str
     summary_model: str
     ollama_host: str
+    backend: Literal["ollama", "lmstudio"] = "ollama"
+    lmstudio_model: str = "gemma-4-e4b"
     metadata_model: str | None = None
     request_timeout: int = 60
     debug: bool = False
@@ -210,6 +213,93 @@ def _ollama_chat_json(
     return content
 
 
+def _lmstudio_model_candidates(model_name: str) -> tuple[str, ...]:
+    compact = model_name.strip()
+    if not compact:
+        return ()
+    if "/" in compact:
+        return (compact,)
+    return (compact, f"google/{compact}")
+
+
+def _lmstudio_chat_json(
+    model: str,
+    prompt: str,
+    timeout_seconds: int,
+    *,
+    response_schema: dict[str, Any] | Literal["", "json"] | None = "json",
+    debug: bool = False,
+) -> str:
+    if debug:
+        LOGGER.info(
+            "[LLM][request] backend=lmstudio model=%s timeout=%ss prompt=%s",
+            model,
+            timeout_seconds,
+            _to_one_line(prompt),
+        )
+
+    previous_timeout = lms.get_sync_api_timeout()
+    lms.set_sync_api_timeout(float(timeout_seconds))
+    last_error: Exception | None = None
+
+    try:
+        for candidate_model in _lmstudio_model_candidates(model):
+            try:
+                model_handle = lms.llm(candidate_model)
+                response = model_handle.respond(prompt, response_format=response_schema)
+                content = response.content or "{}"
+                if debug:
+                    LOGGER.info(
+                        "[LLM][response] backend=lmstudio model=%s chars=%d content=%s",
+                        candidate_model,
+                        len(content),
+                        _to_one_line(content),
+                    )
+                return content
+            except Exception as exc:
+                last_error = exc
+
+        raise LLMBackendUnavailableError(f"LM Studio unavailable: {last_error}")
+    except LLMBackendUnavailableError:
+        raise
+    except Exception as exc:
+        raise LLMBackendUnavailableError(f"LM Studio unavailable: {exc}") from exc
+    finally:
+        lms.set_sync_api_timeout(previous_timeout)
+
+
+def _resolve_model_name(config: LLMConfig, requested_model: str) -> str:
+    if config.backend == "lmstudio" and config.lmstudio_model.strip():
+        return config.lmstudio_model.strip()
+    return requested_model
+
+
+def _dispatch_chat_json(
+    config: LLMConfig,
+    model: str,
+    prompt: str,
+    timeout_seconds: int,
+    *,
+    response_schema: dict[str, Any] | Literal["", "json"] | None = "json",
+) -> str:
+    if config.backend == "lmstudio":
+        return _lmstudio_chat_json(
+            model,
+            prompt,
+            timeout_seconds,
+            response_schema=response_schema,
+            debug=config.debug,
+        )
+    return _ollama_chat_json(
+        config.ollama_host,
+        model,
+        prompt,
+        timeout_seconds=timeout_seconds,
+        response_schema=response_schema,
+        debug=config.debug,
+    )
+
+
 def _normalize_json_text(content: str) -> str:
     text = (content or "").strip()
     if not text:
@@ -349,13 +439,12 @@ def extract_metadata_from_text(
 
     for attempt in range(2):
         try:
-            content = _ollama_chat_json(
-                config.ollama_host,
-                model_name,
+            content = _dispatch_chat_json(
+                config,
+                _resolve_model_name(config, model_name),
                 prompt,
                 timeout_seconds=config.request_timeout,
                 response_schema=metadata_schema,
-                debug=config.debug,
             )
             title, abstract, year = _parse_metadata(content, config.venue_aliases)
             return {
@@ -410,13 +499,12 @@ def _translate_title(title: str, abstract: str, config: LLMConfig) -> str:
     )
 
     def _request_translation(request_prompt: str) -> str:
-        content = _ollama_chat_json(
-            config.ollama_host,
-            config.translate_model,
+        content = _dispatch_chat_json(
+            config,
+            _resolve_model_name(config, config.translate_model),
             request_prompt,
             timeout_seconds=config.request_timeout,
             response_schema=title_schema,
-            debug=config.debug,
         )
         try:
             data = TranslatedTitle.model_validate_json(_normalize_json_text(content))
@@ -469,13 +557,12 @@ def _summarize(title: str, abstract: str, config: LLMConfig) -> str:
         f"JSON Schema: {json.dumps(summary_schema, ensure_ascii=False)}\n\n"
         f"标题：{title_for_prompt}\n摘要：{abstract_for_prompt}"
     )
-    content = _ollama_chat_json(
-        config.ollama_host,
-        config.summary_model,
+    content = _dispatch_chat_json(
+        config,
+        _resolve_model_name(config, config.summary_model),
         prompt,
         timeout_seconds=config.request_timeout,
         response_schema=summary_schema,
-        debug=config.debug,
     )
     try:
         data = TranslatedSummary.model_validate_json(_normalize_json_text(content))
